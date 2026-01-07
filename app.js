@@ -1,12 +1,14 @@
 // -----------------------------
-// Simple SaaS Lead App - Node.js
+// Multi-Client Lead App - Render-ready
 // -----------------------------
 const express = require("express");
 const sqlite3 = require("sqlite3").verbose();
-const fetch = require("node-fetch"); // Used for Telegram API
+
+// Fix fetch for Node 18+
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // -----------------------------
 // Middleware
@@ -15,12 +17,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // -----------------------------
-// Database setup
+// Database setup (Render-friendly /tmp)
 // -----------------------------
-const db = new sqlite3.Database("./database.db");
+const db = new sqlite3.Database("/tmp/database.db");
 
-// Create tables if they don’t exist
 db.serialize(() => {
+  // Clients table
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,6 +35,7 @@ db.serialize(() => {
     )
   `);
 
+  // Leads table
   db.run(`
     CREATE TABLE IF NOT EXISTS leads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +45,7 @@ db.serialize(() => {
     )
   `);
 
-  // Insert a demo client (change later)
+  // Demo client
   db.run(`
     INSERT OR IGNORE INTO clients
     (slug, title, description, primary_color, telegram_chat)
@@ -52,7 +55,7 @@ db.serialize(() => {
 });
 
 // -----------------------------
-// Serve Client Landing Page
+// Serve client landing page dynamically
 // -----------------------------
 app.get("/c/:slug", (req, res) => {
   const slug = req.params.slug;
@@ -60,7 +63,6 @@ app.get("/c/:slug", (req, res) => {
   db.get("SELECT * FROM clients WHERE slug=? AND active=1", [slug], (err, client) => {
     if (!client) return res.status(404).send("Page not found");
 
-    // Send landing page HTML
     res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -69,7 +71,7 @@ app.get("/c/:slug", (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${client.title}</title>
 <style>
-body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana; display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; background:linear-gradient(135deg,#e0f7fa 0%,#80deea 100%); }
+body { font-family:'Segoe UI', Tahoma, Geneva, Verdana'; display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; background:linear-gradient(135deg,#e0f7fa 0%,#80deea 100%); }
 .container { background:#fff; padding:40px; border-radius:12px; box-shadow:0 6px 12px rgba(0,0,0,0.15); max-width:500px; width:100%; text-align:center; }
 h1 { color:${client.primary_color}; }
 p { color:#555; }
@@ -98,7 +100,7 @@ function submitLead() {
 
   fetch("/api/lead", {
     method:"POST",
-    headers: { "Content-Type":"application/json" },
+    headers:{ "Content-Type":"application/json" },
     body: JSON.stringify({ phone:phone, slug:"${client.slug}" })
   })
   .then(res => res.json())
@@ -113,7 +115,7 @@ function submitLead() {
 });
 
 // -----------------------------
-// API Endpoint to Save Leads
+// API to save leads
 // -----------------------------
 app.post("/api/lead", (req, res) => {
   const { phone, slug } = req.body;
@@ -122,7 +124,7 @@ app.post("/api/lead", (req, res) => {
   db.get("SELECT * FROM clients WHERE slug=?", [slug], (err, client) => {
     if (!client) return res.status(400).json({ error: "Invalid client" });
 
-    // Save lead
     db.run("INSERT INTO leads (client_id, phone) VALUES (?, ?)", [client.id, phone]);
 
-    // Send Telegram notification (safe)
+    // Send Telegram notification per client
+    if (client.telegram_chat && process.env.BOT
