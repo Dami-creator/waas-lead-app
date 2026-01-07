@@ -37,19 +37,51 @@ db.run(
   )`
 );
 
-// Helper to get client by slug
-function getClient(slug) {
-  return new Promise((resolve, reject) => {
-    db.get("SELECT * FROM clients WHERE slug = ?", [slug], (err, row) => {
+// ------------------------------
+// Default homepage route
+// ------------------------------
+app.get("/", (req, res) => {
+  db.all("SELECT slug, title FROM clients", [], (err, rows) => {
+    if (err) return res.status(500).send("DB Error");
+
+    let links = rows
+      .map((c) => `<li><a href="/c/${c.slug}">${c.title}</a></li>`)
+      .join("");
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Lead App Home</title>
+        <style>
+          body { font-family:sans-serif; text-align:center; margin-top:50px; }
+          ul { list-style:none; padding:0; }
+          li { margin:10px 0; }
+          a { text-decoration:none; color:#4caf50; font-weight:bold; }
+          a:hover { text-decoration:underline; }
+        </style>
+      </head>
+      <body>
+        <h1>Welcome to Multi-Client Lead App</h1>
+        <p>Click a client to visit their landing page:</p>
+        <ul>${links}</ul>
+      </body>
+      </html>
+    `);
+  });
+});
+
+// ------------------------------
+// Serve landing page for client
+// ------------------------------
+app.get("/c/:slug", async (req, res) => {
+  const client = await new Promise((resolve, reject) => {
+    db.get("SELECT * FROM clients WHERE slug = ?", [req.params.slug], (err, row) => {
       if (err) reject(err);
       else resolve(row);
     });
   });
-}
 
-// Serve landing page for client
-app.get("/c/:slug", async (req, res) => {
-  const client = await getClient(req.params.slug);
   if (!client) return res.status(404).send("Client not found");
 
   // Simple HTML landing page
@@ -81,9 +113,17 @@ app.get("/c/:slug", async (req, res) => {
   `);
 });
 
+// ------------------------------
 // Handle lead submission
+// ------------------------------
 app.post("/lead/:slug", async (req, res) => {
-  const client = await getClient(req.params.slug);
+  const client = await new Promise((resolve, reject) => {
+    db.get("SELECT * FROM clients WHERE slug = ?", [req.params.slug], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+
   if (!client) return res.status(404).send("Client not found");
 
   const phone = req.body.phone;
@@ -93,7 +133,7 @@ app.post("/lead/:slug", async (req, res) => {
   db.run(
     "INSERT INTO leads(client_slug, phone) VALUES(?, ?)",
     [client.slug, phone],
-    async (err) => {
+    (err) => {
       if (err) console.error(err);
     }
   );
@@ -118,15 +158,18 @@ app.post("/lead/:slug", async (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
-    <body>
+    <body style="font-family:sans-serif;text-align:center;margin-top:50px;">
       <h2>Thank you!</h2>
       <p>Your request has been submitted successfully.</p>
+      <a href="/">Back to Home</a>
     </body>
     </html>
   `);
 });
 
+// ------------------------------
 // Admin endpoint to add a client
+// ------------------------------
 app.post("/admin/add-client", (req, res) => {
   const { slug, title, description, primary_color, telegram_chat } = req.body;
   if (!slug || !title || !description) return res.status(400).send("Missing fields");
@@ -141,7 +184,9 @@ app.post("/admin/add-client", (req, res) => {
   );
 });
 
+// ------------------------------
 // Start server
+// ------------------------------
 app.listen(PORT, () => {
   console.log(`Multi-client lead app running → http://localhost:${PORT}`);
 });
