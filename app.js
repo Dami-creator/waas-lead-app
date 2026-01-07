@@ -1,130 +1,147 @@
-// -----------------------------
-// Multi-Client Lead App - Render-ready
-// -----------------------------
-const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
-
-// Fix fetch for Node 18+
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+// app.js
+import express from "express";
+import sqlite3 from "sqlite3";
+import fetch from "node-fetch";
+import bodyParser from "body-parser";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// -----------------------------
 // Middleware
-// -----------------------------
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+app.use(express.static("public"));
 
-// -----------------------------
-// Database setup (Render-friendly /tmp)
-// -----------------------------
-const db = new sqlite3.Database("/tmp/database.db");
-
-db.serialize(() => {
-  // Clients table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS clients (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT UNIQUE,
-      title TEXT,
-      description TEXT,
-      primary_color TEXT,
-      telegram_chat TEXT,
-      active INTEGER DEFAULT 1
-    )
-  `);
-
-  // Leads table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS leads (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      client_id INTEGER,
-      phone TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Demo client
-  db.run(`
-    INSERT OR IGNORE INTO clients
-    (slug, title, description, primary_color, telegram_chat)
-    VALUES
-    ('everbest', 'Get Free Bot', 'Limited-time offer! Enter your number below.', '#4caf50', '6999117324')
-  `);
+// SQLite database
+const db = new sqlite3.Database("/tmp/database.db", (err) => {
+  if (err) console.error("DB Error:", err);
+  else console.log("SQLite DB connected");
 });
 
-// -----------------------------
-// Serve client landing page dynamically
-// -----------------------------
-app.get("/c/:slug", (req, res) => {
-  const slug = req.params.slug;
+// Create tables if not exist
+db.run(
+  `CREATE TABLE IF NOT EXISTS clients (
+    slug TEXT PRIMARY KEY,
+    title TEXT,
+    description TEXT,
+    primary_color TEXT,
+    telegram_chat TEXT
+  )`
+);
+db.run(
+  `CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_slug TEXT,
+    phone TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`
+);
 
-  db.get("SELECT * FROM clients WHERE slug=? AND active=1", [slug], (err, client) => {
-    if (!client) return res.status(404).send("Page not found");
-
-    res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${client.title}</title>
-<style>
-body { font-family:'Segoe UI', Tahoma, Geneva, Verdana'; display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; background:linear-gradient(135deg,#e0f7fa 0%,#80deea 100%); }
-.container { background:#fff; padding:40px; border-radius:12px; box-shadow:0 6px 12px rgba(0,0,0,0.15); max-width:500px; width:100%; text-align:center; }
-h1 { color:${client.primary_color}; }
-p { color:#555; }
-input { width:100%; padding:12px; margin:15px 0; border-radius:6px; border:1px solid #ccc; }
-button { padding:14px 28px; font-size:16px; background:${client.primary_color}; color:white; border:none; border-radius:6px; cursor:pointer; }
-.message { margin-top:15px; font-weight:bold; color:#333; }
-</style>
-</head>
-<body>
-<div class="container">
-<h1>${client.title}</h1>
-<p>${client.description}</p>
-
-<input type="text" id="phone" placeholder="Enter phone number">
-<button onclick="submitLead()">Continue</button>
-
-<div class="message" id="msg"></div>
-</div>
-
-<script>
-function submitLead() {
-  const phone = document.getElementById("phone").value;
-  const msg = document.getElementById("msg");
-
-  if (!phone) { msg.textContent = "Please enter your phone number."; return; }
-
-  fetch("/api/lead", {
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({ phone:phone, slug:"${client.slug}" })
-  })
-  .then(res => res.json())
-  .then(data => { msg.textContent = "Thank you! We will contact you shortly."; })
-  .catch(() => { msg.textContent = "Something went wrong. Try again."; });
-}
-</script>
-</body>
-</html>
-    `);
+// Helper to get client by slug
+function getClient(slug) {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT * FROM clients WHERE slug = ?", [slug], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
   });
+}
+
+// Serve landing page for client
+app.get("/c/:slug", async (req, res) => {
+  const client = await getClient(req.params.slug);
+  if (!client) return res.status(404).send("Client not found");
+
+  // Simple HTML landing page
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${client.title}</title>
+      <style>
+        body { font-family: sans-serif; text-align:center; background:#f0f0f0; }
+        .container { max-width:400px; margin:50px auto; background:#fff; padding:30px; border-radius:10px; }
+        input, button { padding:10px; margin:10px 0; width:100%; border-radius:6px; border:1px solid #ccc; }
+        button { background-color:${client.primary_color || "#4caf50"}; color:white; border:none; cursor:pointer; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>${client.title}</h1>
+        <p>${client.description}</p>
+        <form method="POST" action="/lead/${client.slug}">
+          <input type="text" name="phone" placeholder="Phone Number" required pattern="\\d{10,20}">
+          <button type="submit">Submit</button>
+        </form>
+      </div>
+    </body>
+    </html>
+  `);
 });
 
-// -----------------------------
-// API to save leads
-// -----------------------------
-app.post("/api/lead", (req, res) => {
-  const { phone, slug } = req.body;
-  if (!phone || !slug) return res.status(400).json({ error: "Missing data" });
+// Handle lead submission
+app.post("/lead/:slug", async (req, res) => {
+  const client = await getClient(req.params.slug);
+  if (!client) return res.status(404).send("Client not found");
 
-  db.get("SELECT * FROM clients WHERE slug=?", [slug], (err, client) => {
-    if (!client) return res.status(400).json({ error: "Invalid client" });
+  const phone = req.body.phone;
+  if (!phone) return res.status(400).send("Phone number required");
 
-    db.run("INSERT INTO leads (client_id, phone) VALUES (?, ?)", [client.id, phone]);
+  // Save to DB
+  db.run(
+    "INSERT INTO leads(client_slug, phone) VALUES(?, ?)",
+    [client.slug, phone],
+    async (err) => {
+      if (err) console.error(err);
+    }
+  );
 
-    // Send Telegram notification per client
-    if (client.telegram_chat && process.env.BOT
+  // Send to Telegram
+  const botToken = process.env.BOT_TOKEN;
+  const chatId = client.telegram_chat || "YOUR_CHAT_ID";
+  const message = `📥 New Lead\nClient: ${client.slug}\nPhone: ${phone}`;
+
+  if (botToken) {
+    try {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: message }),
+      });
+    } catch (e) {
+      console.error("Telegram error:", e);
+    }
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <h2>Thank you!</h2>
+      <p>Your request has been submitted successfully.</p>
+    </body>
+    </html>
+  `);
+});
+
+// Admin endpoint to add a client
+app.post("/admin/add-client", (req, res) => {
+  const { slug, title, description, primary_color, telegram_chat } = req.body;
+  if (!slug || !title || !description) return res.status(400).send("Missing fields");
+
+  db.run(
+    "INSERT OR REPLACE INTO clients(slug, title, description, primary_color, telegram_chat) VALUES(?,?,?,?,?)",
+    [slug, title, description, primary_color || "#4caf50", telegram_chat || ""],
+    (err) => {
+      if (err) return res.status(500).send("DB Error");
+      res.send("Client added successfully");
+    }
+  );
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Multi-client lead app running → http://localhost:${PORT}`);
+});
